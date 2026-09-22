@@ -1,0 +1,29 @@
+# Binaries & APKs (GitHub limits files to max 100MB, APKs should go to Releases)
+*.apk
+SecondScreen.apk
+
+# Flutter & Android build artifacts
+client/build/
+client/.dart_tool/
+client/.flutter-plugins
+client/.flutter-plugins-dependencies
+client/android/.gradle/
+client/android/app/build/
+.gradle/
+local.properties
+
+# Python cache & temporary test frames
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*test*.jpg
+*crop*.jpg
+test_frame.jpg
+
+# IDE & OS files
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
