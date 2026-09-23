@@ -33,6 +33,14 @@ if %ADB_EXE%=="" (
 echo.
 echo [*] Khoi dong Python Streaming Server tren Windows...
 cd /d "%~dp0\..\server"
-python main.py %*
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" main.py %*
+) else (
+    where uv >nul 2>&1 && (
+        uv run main.py %*
+    ) || (
+        python main.py %*
+    )
+)
 
 pause

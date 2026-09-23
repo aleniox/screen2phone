@@ -5,6 +5,7 @@ from the mobile client into native Windows mouse and touch input.
 
 import ctypes
 import logging
+import win32api
 
 # Win32 Mouse Event Flags
 MOUSEEVENTF_MOVE = 0x0001
@@ -26,11 +27,25 @@ class InputHandler:
         """
         self.monitor_rect = monitor_rect or {"left": 0, "top": 0, "width": 1920, "height": 1080}
         self.is_mouse_down = False
+        self.mouse_speed = 1.5
         logging.info(f"InputHandler initialized for monitor: {self.monitor_rect}")
 
     def update_monitor_rect(self, rect):
         self.monitor_rect = rect
         logging.info(f"InputHandler monitor updated: {self.monitor_rect}")
+
+    def set_speed(self, speed: float):
+        self.mouse_speed = max(0.5, min(5.0, float(speed)))
+
+    def reset(self):
+        """Release any held mouse buttons and reset state."""
+        try:
+            if self.is_mouse_down:
+                user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                self.is_mouse_down = False
+            user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+        except Exception:
+            pass
 
     def _to_screen_coords(self, norm_x: float, norm_y: float):
         """Convert normalized (0.0 - 1.0) coordinates to absolute Windows pixel coordinates."""
@@ -45,6 +60,7 @@ class InputHandler:
         """
         Processes an incoming input payload from the client.
         Supported event types:
+          - mouse_move:   { type: 'mouse_move', dx: float, dy: float, speed: float }
           - pointer_down: { type: 'pointer_down', x: float, y: float, button: 'left'|'right' }
           - pointer_move: { type: 'pointer_move', x: float, y: float }
           - pointer_up:   { type: 'pointer_up', x: float, y: float, button: 'left'|'right' }
@@ -55,6 +71,17 @@ class InputHandler:
         """
         event_type = data.get("type")
         if not event_type:
+            return
+
+        # Relative mouse movement (Trackpad mode)
+        if event_type == "mouse_move":
+            dx = data.get("dx", 0.0)
+            dy = data.get("dy", 0.0)
+            speed = data.get("speed", self.mouse_speed)
+            move_x = int(dx * speed)
+            move_y = int(dy * speed)
+            if move_x != 0 or move_y != 0:
+                user32.mouse_event(MOUSEEVENTF_MOVE, move_x, move_y, 0, 0)
             return
 
         x = data.get("x")

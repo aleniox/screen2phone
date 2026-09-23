@@ -21,6 +21,13 @@ __pycache__/
 *crop*.jpg
 test_frame.jpg
 
+# Virtual environments & uv
+.venv/
+venv/
+ENV/
+env/
+.uv/
+
 # IDE & OS files
 .idea/
 .vscode/

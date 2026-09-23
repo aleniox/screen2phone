@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -22,7 +23,11 @@ class _DisplayScreenState extends State<DisplayScreen> {
   int _pointerCount = 0;
   double _lastTwoFingerY = 0.0;
   BoxFit _boxFit = BoxFit.contain; // Default to natural aspect ratio (no stretch)
-  bool _enableTouch = false; // Disabled by default as requested by user
+  bool _enableTouch = true; // Enabled by default
+  bool _isTouchpadMode = true; // Trackpad mode with customizable speed
+  double _mouseSpeed = 1.5; // Mouse speed multiplier (1.0x - 3.5x)
+  DateTime _lastMoveTime = DateTime.now();
+  Timer? _reconnectTimer;
 
   @override
   void initState() {
@@ -31,10 +36,32 @@ class _DisplayScreenState extends State<DisplayScreen> {
     if (info != null && info['active_monitor'] != null) {
       _activeMonitor = (info['active_monitor'] as num).toInt();
     }
+    widget.streamService.addListener(_onServiceStatusChanged);
     // Enable immersive sticky full-screen mode
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _setOrientation(_isLandscape);
     WakelockPlus.enable();
+  }
+
+  void _onServiceStatusChanged() {
+    if (!mounted) return;
+    if (widget.streamService.status == ConnectionStateStatus.connected) {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      final info = widget.streamService.serverInfo;
+      if (info != null && info['active_monitor'] != null) {
+        _activeMonitor = (info['active_monitor'] as num).toInt();
+      }
+      setState(() {});
+    } else if (widget.streamService.status == ConnectionStateStatus.disconnected ||
+               widget.streamService.status == ConnectionStateStatus.error) {
+      _reconnectTimer ??= Timer.periodic(const Duration(seconds: 2), (timer) {
+        if (mounted && widget.streamService.status != ConnectionStateStatus.connected) {
+          widget.streamService.reconnect();
+        }
+      });
+      setState(() {});
+    }
   }
 
   void _setOrientation(bool landscape) {
@@ -53,6 +80,8 @@ class _DisplayScreenState extends State<DisplayScreen> {
 
   @override
   void dispose() {
+    _reconnectTimer?.cancel();
+    widget.streamService.removeListener(_onServiceStatusChanged);
     WakelockPlus.disable();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
@@ -116,9 +145,11 @@ class _DisplayScreenState extends State<DisplayScreen> {
     if (_pointerCount == 2) {
       _lastTwoFingerY = event.position.dy;
     } else if (_pointerCount == 1) {
-      final norm = _getNormalizedOffset(event.localPosition);
-      if (norm != null) {
-        widget.streamService.sendPointerDown(norm.dx, norm.dy, button: 'left');
+      if (!_isTouchpadMode) {
+        final norm = _getNormalizedOffset(event.localPosition);
+        if (norm != null) {
+          widget.streamService.sendPointerDown(norm.dx, norm.dy, button: 'left');
+        }
       }
     }
   }
@@ -134,9 +165,17 @@ class _DisplayScreenState extends State<DisplayScreen> {
         _lastTwoFingerY = event.position.dy;
       }
     } else if (_pointerCount == 1) {
-      final norm = _getNormalizedOffset(event.localPosition);
-      if (norm != null) {
-        widget.streamService.sendPointerMove(norm.dx, norm.dy);
+      final now = DateTime.now();
+      if (now.difference(_lastMoveTime).inMilliseconds >= 12) {
+        _lastMoveTime = now;
+        if (_isTouchpadMode) {
+          widget.streamService.sendMouseMove(event.delta.dx, event.delta.dy, speed: _mouseSpeed);
+        } else {
+          final norm = _getNormalizedOffset(event.localPosition);
+          if (norm != null) {
+            widget.streamService.sendPointerMove(norm.dx, norm.dy);
+          }
+        }
       }
     }
   }
@@ -145,18 +184,24 @@ class _DisplayScreenState extends State<DisplayScreen> {
     if (!_enableTouch) return;
     _pointerCount = (_pointerCount - 1).clamp(0, 10);
     if (_pointerCount == 0) {
-      final norm = _getNormalizedOffset(event.localPosition);
-      if (norm != null) {
-        widget.streamService.sendPointerUp(norm.dx, norm.dy, button: 'left');
+      if (!_isTouchpadMode) {
+        final norm = _getNormalizedOffset(event.localPosition);
+        if (norm != null) {
+          widget.streamService.sendPointerUp(norm.dx, norm.dy, button: 'left');
+        }
       }
     }
   }
 
   void _onSecondaryTap(TapUpDetails details) {
     if (!_enableTouch) return;
-    final norm = _getNormalizedOffset(details.localPosition);
-    if (norm != null) {
-      widget.streamService.sendRightTap(norm.dx, norm.dy);
+    if (_isTouchpadMode) {
+      widget.streamService.sendRightTap(0, 0);
+    } else {
+      final norm = _getNormalizedOffset(details.localPosition);
+      if (norm != null) {
+        widget.streamService.sendRightTap(norm.dx, norm.dy);
+      }
     }
   }
 
@@ -216,6 +261,58 @@ class _DisplayScreenState extends State<DisplayScreen> {
               ),
             ),
           ),
+
+          // Reconnecting Overlay if Server disconnected / restarting
+          if (widget.streamService.status != ConnectionStateStatus.connected)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withAlpha(200),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: CircularProgressIndicator(
+                          color: Colors.blueAccent,
+                          strokeWidth: 3,
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      const Text(
+                        "Mất kết nối với Máy tính",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        "Đang tự động kết nối lại...\n(Server đang đổi cấu hình hoặc khởi động lại)",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.arrow_back, size: 16),
+                        label: const Text("Quay lại"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white24,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () {
+                          _reconnectTimer?.cancel();
+                          widget.streamService.disconnect();
+                          Navigator.of(context).pop();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
           // Floating Live FPS Badge (Top Left)
           Positioned(
@@ -396,7 +493,7 @@ class _DisplayScreenState extends State<DisplayScreen> {
                         dense: true,
                         title: const Text("Cảm ứng màn hình", style: TextStyle(color: Colors.white70, fontSize: 13)),
                         subtitle: Text(
-                          _enableTouch ? "Đang Bật (Chạm để click chuột)" : "Đang Tắt (Chỉ dùng chuột PC)",
+                          _enableTouch ? "Đang Bật (Chạm / di chuột)" : "Đang Tắt (Chỉ dùng chuột PC)",
                           style: TextStyle(color: _enableTouch ? Colors.greenAccent : Colors.white38, fontSize: 11),
                         ),
                         value: _enableTouch,
@@ -404,6 +501,52 @@ class _DisplayScreenState extends State<DisplayScreen> {
                           setState(() => _enableTouch = val);
                         },
                       ),
+                      if (_enableTouch) ...[
+                        const SizedBox(height: 4),
+                        const Text("Kiểu điều khiển chuột:", style: TextStyle(color: Colors.white70, fontSize: 13)),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ChoiceChip(
+                                label: const Text("Bàn rê (Trackpad)"),
+                                selected: _isTouchpadMode,
+                                onSelected: (val) {
+                                  if (val) setState(() => _isTouchpadMode = true);
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: ChoiceChip(
+                                label: const Text("Chạm trực tiếp"),
+                                selected: !_isTouchpadMode,
+                                onSelected: (val) {
+                                  if (val) setState(() => _isTouchpadMode = false);
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          "Tốc độ chuột: ${_mouseSpeed.toStringAsFixed(1)}x",
+                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        ),
+                        Slider(
+                          value: _mouseSpeed.clamp(0.5, 3.5),
+                          min: 0.5,
+                          max: 3.5,
+                          divisions: 6,
+                          label: "${_mouseSpeed.toStringAsFixed(1)}x",
+                          onChanged: (val) {
+                            setState(() => _mouseSpeed = val);
+                          },
+                          onChangeEnd: (val) {
+                            widget.streamService.sendConfig(speed: val);
+                          },
+                        ),
+                      ],
                       const SizedBox(height: 8),
 
                       // Quality Selection

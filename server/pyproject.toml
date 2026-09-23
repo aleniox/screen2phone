@@ -1,0 +1,15 @@
+[project]
+name = "second-screen-server"
+version = "1.0.0"
+description = "Second Screen Server for Windows - Turn phone into extended display"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mss>=10.0.0",
+    "Pillow>=10.0.0",
+    "pywin32>=306",
+    "websockets>=13.0",
+]
+
+[tool.uv]
+managed = true

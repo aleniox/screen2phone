@@ -21,9 +21,11 @@
 
 ## Cấu Trúc Dự Án
 
-```
 f:\screen\
+├── Start_Server.bat           # 1-Click khởi động Server (hỗ trợ UV & Virtualenv)
+├── setup_server_uv.bat        # 1-Click cài đặt môi trường UV và dependencies
 ├── server/                    # Máy chủ Windows (Python)
+│   ├── pyproject.toml         # Cấu hình dự án UV/Python
 │   ├── main.py                # Điểm khởi chạy chính & tự động cấu hình ADB
 │   ├── screen_capture.py      # Module chụp màn hình tốc độ cao (MSS & DXGI)
 │   ├── stream_server.py       # WebSocket streaming server nhị phân
@@ -38,6 +40,7 @@ f:\screen\
 │   └── pubspec.yaml
 └── scripts/                   # Script tiện ích 1-Click
     ├── start_usb_display.bat  # 1-Click kết nối USB & chạy Server
+    ├── start_wifi_display.bat # 1-Click kết nối Wi-Fi & chạy Server
     ├── install_virtual_display.bat # 1-Click kích hoạt màn hình ảo
     └── build_android_apk.bat  # Build file APK cài đặt lên điện thoại
 ```
@@ -45,6 +48,10 @@ f:\screen\
 ---
 
 ## Hướng Dẫn Sử Dụng Nhanh (Quick Start)
+ 
+### Bước 0: Cài đặt Môi trường Server với UV (Chỉ cần làm 1 lần)
+- Nhấp đúp chuột vào file: `setup_server_uv.bat`
+- Script sẽ tự động kiểm tra/cài đặt `uv`, khởi tạo môi trường ảo (`.venv`) và cài đặt các thư viện cần thiết (`mss`, `Pillow`, `pywin32`, `websockets`) trong vài giây.
 
 ### Bước 1: Chuẩn bị trên Điện thoại Android
 1. Vào **Cài đặt (Settings)** > **Thông tin điện thoại (About Phone)** > Chạm liên tục 7 lần vào **Số bản dựng (Build Number)** để mở khóa *Tùy chọn nhà phát triển (Developer Options)*.

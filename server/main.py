@@ -17,7 +17,7 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 from vdd_manager import VDDManager
-from stream_server import StreamServer
+from stream_server import StreamServer, is_port_available, find_available_port
 from discovery import DiscoveryServer, get_local_ip_addresses
 
 logging.basicConfig(
@@ -127,6 +127,16 @@ def main():
     else:
         monitor_target = args.monitor
 
+    # Check port availability
+    if not is_port_available(args.port):
+        if args.port == 8080:
+            fallback = find_available_port(8080)
+            logging.warning(f"Port 8080 is unavailable (occupied or forbidden). Automatically switching to port {fallback}.")
+            args.port = fallback
+        else:
+            logging.error(f"Port {args.port} is currently unavailable. Please specify a different port with --port <number>.")
+            sys.exit(1)
+
     # Set up ADB
     setup_adb_forwarding(port=args.port)
 
@@ -162,7 +172,15 @@ def main():
     except KeyboardInterrupt:
         logging.info("Server stopped by user.")
     finally:
+        server.stop()
         discovery.stop()
+        adb = find_adb()
+        if adb:
+            try:
+                subprocess.run([adb, "forward", "--remove", f"tcp:{args.port}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([adb, "reverse", "--remove", f"tcp:{args.port}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     main()

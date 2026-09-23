@@ -22,18 +22,28 @@ class UsbStreamService extends ChangeNotifier {
   // Stream controller for frame updates
   final StreamController<Uint8List> _frameStreamController = StreamController<Uint8List>.broadcast();
 
+  String? _lastUrl;
+
   ConnectionStateStatus get status => _status;
   String get errorMessage => _errorMessage;
+  String? get lastUrl => _lastUrl;
   Uint8List? get latestFrame => _latestFrame;
   Map<String, dynamic>? get serverInfo => _serverInfo;
   double get fps => _fps;
   Stream<Uint8List> get frameStream => _frameStreamController.stream;
+
+  void reconnect() {
+    if (_lastUrl != null && _status != ConnectionStateStatus.connecting && _status != ConnectionStateStatus.connected) {
+      connect(_lastUrl!);
+    }
+  }
 
   void connect(String url) {
     if (_status == ConnectionStateStatus.connecting || _status == ConnectionStateStatus.connected) {
       return;
     }
 
+    _lastUrl = url;
     _status = ConnectionStateStatus.connecting;
     _errorMessage = '';
     notifyListeners();
@@ -143,6 +153,10 @@ class UsbStreamService extends ChangeNotifier {
     sendEvent({'type': 'pointer_move', 'x': x, 'y': y});
   }
 
+  void sendMouseMove(double dx, double dy, {double speed = 1.5}) {
+    sendEvent({'type': 'mouse_move', 'dx': dx, 'dy': dy, 'speed': speed});
+  }
+
   void sendPointerUp(double x, double y, {String button = 'left'}) {
     sendEvent({'type': 'pointer_up', 'x': x, 'y': y, 'button': button});
   }
@@ -163,12 +177,13 @@ class UsbStreamService extends ChangeNotifier {
     sendEvent({'type': 'scroll', 'dy': dy});
   }
 
-  void sendConfig({int? fps, int? quality, double? scale, int? monitorIndex}) {
+  void sendConfig({int? fps, int? quality, double? scale, int? monitorIndex, double? speed}) {
     final Map<String, dynamic> config = {'type': 'config'};
     if (fps != null) config['fps'] = fps;
     if (quality != null) config['quality'] = quality;
     if (scale != null) config['scale'] = scale;
     if (monitorIndex != null) config['monitor_index'] = monitorIndex;
+    if (speed != null) config['speed'] = speed;
     sendEvent(config);
   }
 

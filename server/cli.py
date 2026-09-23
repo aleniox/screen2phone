@@ -23,7 +23,7 @@ os.system('')
 
 from discovery import DiscoveryServer, get_local_ip_addresses
 from vdd_manager import VDDManager
-from stream_server import StreamServer
+from stream_server import StreamServer, is_port_available, find_available_port
 import mss
 
 # ANSI Colors
@@ -92,6 +92,17 @@ def setup_usb_adb(port=8080):
         print(f"{C_RED}[!] Lỗi cấu hình ADB: {e}{C_RESET}")
         return False
 
+def cleanup_usb_adb(port=8080):
+    """Removes ADB port forwarding and reverse rules upon server shutdown."""
+    adb = find_adb()
+    if not adb:
+        return
+    try:
+        subprocess.run([adb, "forward", "--remove", f"tcp:{port}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([adb, "reverse", "--remove", f"tcp:{port}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
 def get_monitors_info():
     with mss.mss() as sct:
         monitors = []
@@ -112,7 +123,14 @@ def get_monitors_info():
 
 class ServerCLI:
     def __init__(self):
-        self.port = 8080
+        default_port = 8080
+        if is_port_available(default_port):
+            self.port = default_port
+            self.port_conflict_detected = False
+        else:
+            self.port = find_available_port(default_port)
+            self.port_conflict_detected = True
+
         self.monitor_index = 2
         self.quality = 55
         self.scale = 0.8
@@ -160,9 +178,13 @@ class ServerCLI:
         # Stream Config
         print(f"  Cau hinh truyen     : {C_WHITE}Chat luong: {self.quality}% | Ty le: {int(self.scale*100)}% | FPS: {self.fps}{C_RESET}")
 
-        # Network
+        # Network & Port
         ip_str = ", ".join(local_ips) if local_ips else "Khong tim thay Wi-Fi/LAN"
         print(f"  Dia chi IP Wi-Fi    : {C_CYAN}{ip_str}{C_RESET}")
+        port_note = ""
+        if self.port_conflict_detected and self.port != 8080:
+            port_note = f" {C_YELLOW}(Cổng 8080 bị chiếm bởi dịch vụ khác, tự động dùng {self.port}){C_RESET}"
+        print(f"  Cổng kết nối (Port) : {C_CYAN}{self.port}{C_RESET}{port_note}")
 
         # USB ADB
         adb_color = C_GREEN if adb_status == "Connected" else (C_RED if adb_status == "Error" else C_YELLOW)
@@ -170,6 +192,20 @@ class ServerCLI:
         print("-" * 71)
 
     def run_server_loop(self):
+        if not is_port_available(self.port):
+            clear_screen()
+            self.print_banner()
+            print(f"\n{C_RED}[!] Cổng {self.port} hiện đang bị chiếm dụng hoặc không có quyền truy cập.{C_RESET}")
+            new_port = find_available_port(self.port)
+            print(f"{C_CYAN}[*] Gợi ý cổng khả dụng: {new_port}{C_RESET}")
+            ans = input(f"Bạn có muốn chuyển sang cổng {new_port} để chạy không? (Y/N, mặc định Y): ").strip().lower()
+            if ans != 'n':
+                self.port = new_port
+                self.port_conflict_detected = True
+            else:
+                input("\nNhấn Enter để quay lại Menu chính...")
+                return
+
         clear_screen()
         self.print_banner()
         print(f"\n{C_GREEN}{C_BOLD}>>> ĐANG KHỞI ĐỘNG SERVER TRÊN CỔNG {self.port}...<<<{C_RESET}\n")
@@ -207,11 +243,19 @@ class ServerCLI:
             asyncio.run(self.stream_server.start())
         except KeyboardInterrupt:
             print(f"\n{C_YELLOW}[!] Đang dừng Server...{C_RESET}")
+        except (OSError, PermissionError) as e:
+            print(f"\n{C_RED}[!] Lỗi khởi động Server: {e}{C_RESET}")
+            print(f"{C_YELLOW}[*] Cổng {self.port} đang bị hệ thống hoặc ứng dụng khác chiếm dụng (WinError 10013 / 10048).{C_RESET}")
+            print(f"{C_CYAN}[*] Bạn có thể vào mục [7] trong Menu để đổi sang cổng khác (ví dụ 8082, 8088, 8888).{C_RESET}")
+            input("\nNhấn Enter để quay lại Menu chính...")
         finally:
+            if self.stream_server:
+                self.stream_server.stop()
             if self.discovery:
                 self.discovery.stop()
+            cleanup_usb_adb(self.port)
             self.is_running = False
-            print(f"{C_GREEN}[OK] Đã dừng Server thành công.{C_RESET}\n")
+            print(f"{C_GREEN}[OK] Đã dừng Server và dọn dẹp kết nối thành công.{C_RESET}\n")
             time.sleep(1)
 
     def select_monitor_menu(self):
@@ -320,6 +364,38 @@ class ServerCLI:
                 print(f"{C_RED}[!] Lỗi: {res}{C_RESET}")
             input("\nNhấn Enter để tiếp tục...")
 
+    def change_port_menu(self):
+        clear_screen()
+        self.print_banner()
+        print(f"\n{C_BOLD}--- CẤU HÌNH CỔNG KẾT NỐI (PORT) ---{C_RESET}\n")
+        print(f"  Cổng WebSocket hiện tại: {C_CYAN}{self.port}{C_RESET}")
+        status = f"{C_GREEN}[Khả dụng]{C_RESET}" if is_port_available(self.port) else f"{C_RED}[Đang bị chiếm / Không khả dụng]{C_RESET}"
+        print(f"  Trạng thái             : {status}\n")
+        suggested = find_available_port(self.port)
+        if suggested != self.port:
+            print(f"  Gợi ý cổng khả dụng    : {C_GREEN}{suggested}{C_RESET}\n")
+
+        val = input(f"Nhập số cổng mới (1024-65535, Enter để giữ nguyên): ").strip()
+        if not val:
+            return
+        try:
+            p = int(val)
+            if 1024 <= p <= 65535:
+                if is_port_available(p):
+                    self.port = p
+                    self.port_conflict_detected = False
+                    print(f"{C_GREEN}[OK] Đã đổi sang cổng {p}!{C_RESET}")
+                else:
+                    print(f"{C_YELLOW}[!] Cảnh báo: Cổng {p} có vẻ đang bị chiếm bởi một ứng dụng khác.{C_RESET}")
+                    confirm = input("Bạn vẫn muốn dùng cổng này chứ? (Y/N): ").strip().lower()
+                    if confirm == 'y':
+                        self.port = p
+            else:
+                print(f"{C_RED}[!] Cổng phải nằm trong khoảng 1024 - 65535.{C_RESET}")
+        except ValueError:
+            print(f"{C_RED}[!] Vui lòng nhập số nguyên hợp lệ.{C_RESET}")
+        time.sleep(1)
+
     def main_loop(self):
         while True:
             clear_screen()
@@ -333,9 +409,10 @@ class ServerCLI:
             print(f"  [4] Tùy chỉnh Độ nét & Độ trễ (Quality / Scale / FPS)")
             print(f"  [5] Quản lý Màn hình ảo VDD (Tạo thêm màn hình thứ 2)")
             print(f"  [6] Mở Windows Display Settings (Cài đặt màn hình / Win+P)")
+            print(f"  [7] Đổi Cổng kết nối WebSocket (Hiện tại: Cổng {self.port})")
             print(f"  {C_RED}[0] Thoát{C_RESET}")
 
-            choice = input(f"\n{C_BOLD}Nhập lựa chọn của bạn [0-6]: {C_RESET}").strip()
+            choice = input(f"\n{C_BOLD}Nhập lựa chọn của bạn [0-7]: {C_RESET}").strip()
 
             if choice == '1':
                 self.run_server_loop()
@@ -358,6 +435,8 @@ class ServerCLI:
                     time.sleep(1)
                 except Exception as e:
                     print(f"Lỗi: {e}")
+            elif choice == '7':
+                self.change_port_menu()
             elif choice == '0':
                 clear_screen()
                 print(f"\n{C_CYAN}Cảm ơn bạn đã sử dụng Second Screen Server! Tạm biệt.{C_RESET}\n")

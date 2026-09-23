@@ -6,6 +6,7 @@ and prevents network buffer bloat.
 
 import io
 import time
+import logging
 import threading
 import mss
 import ctypes
@@ -43,6 +44,7 @@ class ScreenCapture:
         self.quality = 55  # Optimized default for real-time low latency
         self.scale = 0.8   # 0.8 = ~1536x864, crystal clear on phone, 70% smaller size
         self.latest_frame = b""
+        self.motion_frames_remaining = 0
         self.running = False
         self.worker_thread = None
         self.lock = threading.Lock()
@@ -51,6 +53,7 @@ class ScreenCapture:
         # Initial probe
         attach_to_input_desktop()
         self.sct = mss.MSS() if hasattr(mss, 'MSS') else mss.mss()
+        self.display_count = user32.GetSystemMetrics(80)
         self._refresh_monitors()
 
     def _refresh_monitors(self):
@@ -83,13 +86,34 @@ class ScreenCapture:
         """Dedicated thread loop that captures and compresses the desktop at high speed."""
         attach_to_input_desktop()
         sct = mss.MSS() if hasattr(mss, 'MSS') else mss.mss()
+        jpeg_buf = io.BytesIO()
+        last_monitor_check = time.time()
         
         while self.running:
+            t_start = time.time()
             try:
+                # Check if monitor count changed without heavy GDI calls
+                if t_start - last_monitor_check > 2.0:
+                    last_monitor_check = t_start
+                    cur_count = user32.GetSystemMetrics(80)
+                    if cur_count != self.display_count:
+                        self.display_count = cur_count
+                        with self.lock:
+                            self._refresh_monitors()
+
                 with self.lock:
                     target_monitor = self.active_monitor
-                    quality = self.quality
+                    base_quality = self.quality
                     scale = self.scale
+
+                # Adaptive QP: during fast window dragging or rapid scrolling,
+                # frame entropy explodes. Temporarily lower quality to reduce DCT size
+                # by 30-40%. Motion blur naturally masks compression artifacts.
+                if self.motion_frames_remaining > 0:
+                    effective_quality = max(28, base_quality - 16)
+                    self.motion_frames_remaining -= 1
+                else:
+                    effective_quality = base_quality
 
                 sct_img = sct.grab(target_monitor)
                 img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
@@ -97,7 +121,7 @@ class ScreenCapture:
                 if scale < 1.0:
                     target_w = int(img.width * scale)
                     target_h = int(img.height * scale)
-                    img = img.resize((target_w, target_h), Image.Resampling.BILINEAR)
+                    img = img.resize((target_w, target_h), Image.Resampling.NEAREST)
 
                 # Draw Windows Mouse Cursor if it is located inside this monitor
                 try:
@@ -113,19 +137,32 @@ class ScreenCapture:
                 except Exception:
                     pass
 
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=quality, optimize=False)
-                frame_bytes = buf.getvalue()
+                jpeg_buf.seek(0)
+                jpeg_buf.truncate(0)
+                img.save(jpeg_buf, format="JPEG", quality=effective_quality, optimize=False, subsampling=2)
+                frame_bytes = jpeg_buf.getvalue()
+
+                # If compressed frame size exceeds 80KB, window dragging or high motion is active
+                # Keep lowered quality for at least the next 8 frames (~150-200ms)
+                if len(frame_bytes) > 80 * 1024:
+                    self.motion_frames_remaining = 8
 
                 with self.lock:
                     self.latest_frame = frame_bytes
 
-                # Short yield so CPU doesn't spike to 100%
-                time.sleep(0.015) # ~60 FPS cap
+                # Dynamic sleep to target 60 FPS without artificial delay
+                elapsed = time.time() - t_start
+                target_interval = 1.0 / 60.0
+                if elapsed < target_interval:
+                    time.sleep(target_interval - elapsed)
+                else:
+                    time.sleep(0.001)
             except Exception as e:
                 logging.error(f"[CAPTURE WORKER ERROR] {e}")
                 attach_to_input_desktop()
                 try:
+                    with self.lock:
+                        self._refresh_monitors()
                     sct = mss.MSS() if hasattr(mss, 'MSS') else mss.mss()
                 except Exception:
                     pass
